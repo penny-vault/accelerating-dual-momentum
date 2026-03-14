@@ -62,10 +62,14 @@ Executed on the last trading day of each month:
 4. **Compute risk-adjusted momentum** for each period (n = 1, 3, 6):
    ```go
    momentum(n) = prices.Pct(n).MulScalar(100)  // percent change, scaled to match DGS3MO units
-   riskAdj(n)  = dgs3mo.Rolling(n).Sum().DivScalar(12)  // cumulative scaled risk-free rate
-   ram(n)      = momentum(n).Sub(riskAdj(n), data.MetricClose)  // broadcast subtract across all assets
+   rfCol       = riskFree.Rolling(n).Sum().DivScalar(12).Column(dgs3moAsset, data.MetricClose)
+   ram(n)      = momentum(n).Apply(func(col []float64) []float64 {
+       out := make([]float64, len(col))
+       for i := range col { out[i] = col[i] - rfCol[i] }
+       return out
+   })
    ```
-   The `.MulScalar(100)` is required because `Pct()` returns fractions (0.10 for 10%) while DGS3MO values are in percentage units (4.5 means 4.5%). The broadcast form of `Sub` (with the metric argument) broadcasts the single DGS3MO column across all risk-on asset columns.
+   The `.MulScalar(100)` is required because `Pct()` returns fractions (0.10 for 10%) while DGS3MO values are in percentage units (4.5 means 4.5%). The risk-free column is extracted as a `[]float64` slice and subtracted via `Apply` because `Sub` broadcast requires matching asset identities, and DGS3MO is a different asset than the risk-on equities.
 
 5. **Average the three scores**:
    ```go
