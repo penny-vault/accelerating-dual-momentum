@@ -50,27 +50,36 @@ Executed on the last trading day of each month:
 
 1. **Fetch price data**: Get 6-month window of daily close prices for risk-on assets via `s.RiskOn.Window(ctx, portfolio.Months(6), data.MetricClose)`.
 
-2. **Fetch risk-free rate**: Get 6-month window of DGS3MO daily data via the engine.
+2. **Fetch risk-free rate**: Create a one-asset universe for DGS3MO and fetch the same window:
+   ```go
+   dgs3moUniverse := e.Universe(e.Asset("DGS3MO"))
+   dgs3moDF, err := dgs3moUniverse.Window(ctx, portfolio.Months(6), data.MetricClose)
+   ```
+   DGS3MO is an economic indicator; its values are accessed via `data.MetricClose`.
 
 3. **Downsample to monthly**: Convert both DataFrames from daily to monthly frequency using `.Downsample(...).Last()`.
 
 4. **Compute risk-adjusted momentum** for each period (n = 1, 3, 6):
-   - `momentum(n) = prices.Pct(n)` -- percent change over n monthly periods
-   - `riskAdj(n) = dgs3mo.Rolling(n).Sum().DivScalar(12)` -- cumulative scaled risk-free rate
-   - `ram(n) = momentum(n).Sub(riskAdj(n))` -- risk-adjusted momentum
+   ```go
+   momentum(n) = prices.Pct(n).MulScalar(100)  // percent change, scaled to match DGS3MO units
+   riskAdj(n)  = dgs3mo.Rolling(n).Sum().DivScalar(12)  // cumulative scaled risk-free rate
+   ram(n)      = momentum(n).Sub(riskAdj(n), data.MetricClose)  // broadcast subtract across all assets
+   ```
+   The `.MulScalar(100)` is required because `Pct()` returns fractions (0.10 for 10%) while DGS3MO values are in percentage units (4.5 means 4.5%). The broadcast form of `Sub` (with the metric argument) broadcasts the single DGS3MO column across all risk-on asset columns.
 
-5. **Average the three scores**: `score = (ram1 + ram3 + ram6) / 3`
+5. **Average the three scores**:
+   ```go
+   score := ram1.Add(ram3).Add(ram6).DivScalar(3)
+   ```
 
-6. **Take the last row**: current month's momentum scores for each asset.
+6. **Take the last row and select**: Call `.Last()` to get current month's scores, then use `portfolio.MaxAboveZero(data.MetricClose, riskOffDF)` to select the best in-market asset if its score > 0, otherwise fall back to the risk-off asset. The risk-off DataFrame is fetched via `s.RiskOff.At(ctx, e.CurrentDate(), data.MetricClose)`, which produces the same timestamp as `.Last()` since both are anchored to the current trading date.
 
-7. **Select asset**: Use `portfolio.MaxAboveZero(data.MetricClose, riskOffDF)` -- if the best in-market momentum score is > 0, select that asset; otherwise fall back to the risk-off asset.
-
-8. **Rebalance**: Apply `portfolio.EqualWeight()` then `p.RebalanceTo()`.
+7. **Rebalance**: Apply `portfolio.EqualWeight()` then `p.RebalanceTo()`.
 
 ### Edge Cases
 
-- If fewer than 7 monthly data points available after downsampling (need 6 for `Pct(6)` plus 1 base row), return early without trading.
-- NaN rows produced by `Pct()` are dropped before selection.
+- If fewer than 7 monthly data points available after downsampling, return early without trading. 7 rows is the minimum needed for both `Pct(6)` (first valid value at index 6) and `Rolling(6).Sum()` (first valid value at index 5) to produce at least one overlapping valid row.
+- NaN rows produced by `Pct()` and `Rolling().Sum()` are dropped before selection.
 
 ## Momentum631 Formula
 
