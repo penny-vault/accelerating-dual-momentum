@@ -42,14 +42,15 @@ func (s *AcceleratingDualMomentum) Name() string {
 	return "Accelerating Dual Momentum"
 }
 
-func (s *AcceleratingDualMomentum) Setup(e *engine.Engine) {
+func (s *AcceleratingDualMomentum) Setup(eng *engine.Engine) {
 	tc, err := tradecron.New("@monthend", tradecron.MarketHours{Open: 930, Close: 1600})
 	if err != nil {
 		panic(err)
 	}
-	e.Schedule(tc)
-	e.SetBenchmark(e.Asset("VFINX"))
-	e.RiskFreeAsset(e.Asset("DGS3MO"))
+
+	eng.Schedule(tc)
+	eng.SetBenchmark(eng.Asset("VFINX"))
+	eng.RiskFreeAsset(eng.Asset("DGS3MO"))
 }
 
 func (s *AcceleratingDualMomentum) Describe() engine.StrategyDescription {
@@ -68,23 +69,26 @@ func (s *AcceleratingDualMomentum) Describe() engine.StrategyDescription {
 func riskAdjustedMomentum(n int, prices, riskFree *data.DataFrame, dgs3moAsset asset.Asset) *data.DataFrame {
 	mom := prices.Pct(n).MulScalar(100)
 	rfCol := riskFree.Rolling(n).Sum().DivScalar(12).Column(dgs3moAsset, data.MetricClose)
+
 	return mom.Apply(func(col []float64) []float64 {
 		out := make([]float64, len(col))
 		for i := range col {
 			out[i] = col[i] - rfCol[i]
 		}
+
 		return out
 	})
 }
 
-func (s *AcceleratingDualMomentum) Compute(ctx context.Context, e *engine.Engine, p portfolio.Portfolio) error {
+func (s *AcceleratingDualMomentum) Compute(ctx context.Context, eng *engine.Engine, strategyPortfolio portfolio.Portfolio) error {
 	priceDF, err := s.RiskOn.Window(ctx, portfolio.Months(6), data.MetricClose)
 	if err != nil {
 		return fmt.Errorf("fetch risk-on prices: %w", err)
 	}
 
-	dgs3moAsset := e.Asset("DGS3MO")
-	dgs3moUniverse := e.Universe(dgs3moAsset)
+	dgs3moAsset := eng.Asset("DGS3MO")
+	dgs3moUniverse := eng.Universe(dgs3moAsset)
+
 	riskFreeDF, err := dgs3moUniverse.Window(ctx, portfolio.Months(6), data.MetricClose)
 	if err != nil {
 		return fmt.Errorf("fetch DGS3MO: %w", err)
@@ -109,19 +113,20 @@ func (s *AcceleratingDualMomentum) Compute(ctx context.Context, e *engine.Engine
 	}
 
 	// Record momentum scores as structured annotations.
-	score.Annotate(p)
+	score.Annotate(strategyPortfolio)
 
-	riskOffDF, err := s.RiskOff.At(ctx, e.CurrentDate(), data.MetricClose)
+	riskOffDF, err := s.RiskOff.At(ctx, eng.CurrentDate(), data.MetricClose)
 	if err != nil {
 		return fmt.Errorf("fetch risk-off: %w", err)
 	}
 
 	// Select the asset with the highest positive score; fall back to risk-off.
 	portfolio.MaxAboveZero(data.MetricClose, riskOffDF).Select(score)
+
 	plan, err := portfolio.EqualWeight(score)
 	if err != nil {
 		return fmt.Errorf("EqualWeight: %w", err)
 	}
 
-	return p.RebalanceTo(ctx, plan...)
+	return strategyPortfolio.RebalanceTo(ctx, plan...)
 }
