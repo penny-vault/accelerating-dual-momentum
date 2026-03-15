@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"math"
 	"time"
 
@@ -13,6 +14,9 @@ import (
 	"github.com/penny-vault/pvbt/universe"
 	"github.com/rs/zerolog"
 )
+
+//go:embed README.md
+var description string
 
 type AcceleratingDualMomentum struct {
 	RiskOn  universe.Universe `pvbt:"risk-on"  desc:"List of ETF, Mutual Fund, or Stock tickers to invest in" default:"VFINX,PRIDX" suggest:"Engineered Portfolio=VFINX,VINEX|PRIDX=VFINX,PRIDX|All ETF=SPY,SCZ"`
@@ -36,7 +40,7 @@ func (s *AcceleratingDualMomentum) Setup(e *engine.Engine) {
 func (s *AcceleratingDualMomentum) Describe() engine.StrategyDescription {
 	return engine.StrategyDescription{
 		ShortCode:   "adm",
-		Description: "A market timing strategy that uses a 1-, 3-, and 6-month momentum score to select assets.",
+		Description: description,
 		Source:      "https://engineeredportfolio.com/2018/05/02/accelerating-dual-momentum-investing/",
 		Version:     "1.0.0",
 		VersionDate: time.Date(2026, 3, 14, 0, 0, 0, 0, time.UTC),
