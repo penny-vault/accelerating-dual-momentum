@@ -18,7 +18,9 @@ package main
 import (
 	"context"
 	_ "embed"
+	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/penny-vault/pvbt/asset"
@@ -27,7 +29,6 @@ import (
 	"github.com/penny-vault/pvbt/portfolio"
 	"github.com/penny-vault/pvbt/tradecron"
 	"github.com/penny-vault/pvbt/universe"
-	"github.com/rs/zerolog"
 )
 
 //go:embed README.md
@@ -80,14 +81,11 @@ func riskAdjustedMomentum(n int, prices, riskFree *data.DataFrame, dgs3moAsset a
 	})
 }
 
-func (s *AcceleratingDualMomentum) Compute(ctx context.Context, e *engine.Engine, p portfolio.Portfolio) {
-	log := zerolog.Ctx(ctx)
-
+func (s *AcceleratingDualMomentum) Compute(ctx context.Context, e *engine.Engine, p portfolio.Portfolio) error {
 	// 1. Fetch 6-month window of daily close prices for risk-on assets.
 	priceDF, err := s.RiskOn.Window(ctx, portfolio.Months(6), data.MetricClose)
 	if err != nil {
-		log.Error().Err(err).Msg("failed to fetch risk-on prices")
-		return
+		return fmt.Errorf("failed to fetch risk-on prices: %w", err)
 	}
 
 	// 2. Fetch 6-month window of DGS3MO (risk-free rate).
@@ -95,8 +93,7 @@ func (s *AcceleratingDualMomentum) Compute(ctx context.Context, e *engine.Engine
 	dgs3moUniverse := e.Universe(dgs3moAsset)
 	riskFreeDF, err := dgs3moUniverse.Window(ctx, portfolio.Months(6), data.MetricClose)
 	if err != nil {
-		log.Error().Err(err).Msg("failed to fetch DGS3MO data")
-		return
+		return fmt.Errorf("failed to fetch DGS3MO data: %w", err)
 	}
 
 	// 3. Downsample both to monthly frequency (use last value in each month).
@@ -106,7 +103,7 @@ func (s *AcceleratingDualMomentum) Compute(ctx context.Context, e *engine.Engine
 	// 4. Need at least 7 monthly rows for Pct(6) and Rolling(6).Sum() to
 	//    both produce at least one valid value.
 	if prices.Len() < 7 {
-		return
+		return nil
 	}
 
 	// 5. Compute risk-adjusted momentum for each period.
@@ -119,26 +116,37 @@ func (s *AcceleratingDualMomentum) Compute(ctx context.Context, e *engine.Engine
 	score = score.Drop(math.NaN()).Last()
 
 	if score.Len() == 0 {
-		return
+		return nil
+	}
+
+	// Build justification from momentum scores.
+	var justParts []string
+	for _, a := range score.AssetList() {
+		justParts = append(justParts, fmt.Sprintf("%s=%.2f", a.Ticker, score.Value(a, data.MetricClose)))
 	}
 
 	// 7. Get risk-off fallback data at the current date.
 	riskOffDF, err := s.RiskOff.At(ctx, e.CurrentDate(), data.MetricClose)
 	if err != nil {
-		log.Error().Err(err).Msg("failed to fetch risk-off data")
-		return
+		return fmt.Errorf("failed to fetch risk-off data: %w", err)
 	}
 
 	// 8. Select the asset with the highest positive score; fall back to risk-off.
 	portfolio.MaxAboveZero(data.MetricClose, riskOffDF).Select(score)
 	plan, err := portfolio.EqualWeight(score)
 	if err != nil {
-		log.Error().Err(err).Msg("EqualWeight failed")
-		return
+		return fmt.Errorf("EqualWeight: %w", err)
+	}
+
+	justification := fmt.Sprintf("momentum scores: %s", strings.Join(justParts, ", "))
+	for i := range plan {
+		plan[i].Justification = justification
 	}
 
 	// 9. Rebalance to the selected asset.
 	if err := p.RebalanceTo(ctx, plan...); err != nil {
-		log.Error().Err(err).Msg("rebalance failed")
+		return fmt.Errorf("rebalance failed: %w", err)
 	}
+
+	return nil
 }
