@@ -28,6 +28,7 @@ import (
 	"github.com/penny-vault/pvbt/portfolio"
 	"github.com/penny-vault/pvbt/tradecron"
 	"github.com/penny-vault/pvbt/universe"
+	"github.com/rs/zerolog"
 )
 
 //go:embed README.md
@@ -68,7 +69,7 @@ func (s *AcceleratingDualMomentum) Describe() engine.StrategyDescription {
 //	ram(n) = (price[now]/price[n_ago] - 1) * 100 - sum(dgs3mo[0:n]) / 12
 func riskAdjustedMomentum(n int, prices, riskFree *data.DataFrame, dgs3moAsset asset.Asset) *data.DataFrame {
 	mom := prices.Pct(n).MulScalar(100)
-	rfCol := riskFree.Rolling(n).Sum().DivScalar(12).Column(dgs3moAsset, data.MetricClose)
+	rfCol := riskFree.Rolling(n).Sum().DivScalar(12).Column(dgs3moAsset, data.AdjClose)
 
 	return mom.Apply(func(col []float64) []float64 {
 		out := make([]float64, len(col))
@@ -81,7 +82,7 @@ func riskAdjustedMomentum(n int, prices, riskFree *data.DataFrame, dgs3moAsset a
 }
 
 func (s *AcceleratingDualMomentum) Compute(ctx context.Context, eng *engine.Engine, strategyPortfolio portfolio.Portfolio) error {
-	priceDF, err := s.RiskOn.Window(ctx, portfolio.Months(6), data.MetricClose)
+	priceDF, err := s.RiskOn.Window(ctx, portfolio.Months(7), data.AdjClose)
 	if err != nil {
 		return fmt.Errorf("fetch risk-on prices: %w", err)
 	}
@@ -89,7 +90,7 @@ func (s *AcceleratingDualMomentum) Compute(ctx context.Context, eng *engine.Engi
 	dgs3moAsset := eng.Asset("DGS3MO")
 	dgs3moUniverse := eng.Universe(dgs3moAsset)
 
-	riskFreeDF, err := dgs3moUniverse.Window(ctx, portfolio.Months(6), data.MetricClose)
+	riskFreeDF, err := dgs3moUniverse.Window(ctx, portfolio.Months(7), data.AdjClose)
 	if err != nil {
 		return fmt.Errorf("fetch DGS3MO: %w", err)
 	}
@@ -97,8 +98,23 @@ func (s *AcceleratingDualMomentum) Compute(ctx context.Context, eng *engine.Engi
 	prices := priceDF.Downsample(data.Monthly).Last()
 	riskFree := riskFreeDF.Downsample(data.Monthly).Last()
 
+	log := zerolog.Ctx(ctx)
+	log.Debug().
+		Int("prices_rows", prices.Len()).
+		Int("riskfree_rows", riskFree.Len()).
+		Time("prices_start", prices.Start()).
+		Time("prices_end", prices.End()).
+		Time("riskfree_start", riskFree.Start()).
+		Time("riskfree_end", riskFree.End()).
+		Msg("monthly data after downsample")
+
 	if prices.Len() < 7 {
-		return nil
+		return fmt.Errorf("expected at least 7 monthly price rows, got %d (start=%s end=%s)",
+			prices.Len(), prices.Start().Format("2006-01-02"), prices.End().Format("2006-01-02"))
+	}
+	if riskFree.Len() < 7 {
+		return fmt.Errorf("expected at least 7 monthly risk-free rows, got %d (start=%s end=%s)",
+			riskFree.Len(), riskFree.Start().Format("2006-01-02"), riskFree.End().Format("2006-01-02"))
 	}
 
 	ram1 := riskAdjustedMomentum(1, prices, riskFree, dgs3moAsset)
@@ -112,16 +128,29 @@ func (s *AcceleratingDualMomentum) Compute(ctx context.Context, eng *engine.Engi
 		return nil
 	}
 
+	for _, a := range score.AssetList() {
+		r1 := ram1.Drop(math.NaN()).Last()
+		r3 := ram3.Drop(math.NaN()).Last()
+		r6 := ram6.Drop(math.NaN()).Last()
+		log.Debug().
+			Str("ticker", a.Ticker).
+			Float64("mom1", r1.Value(a, data.AdjClose)).
+			Float64("mom3", r3.Value(a, data.AdjClose)).
+			Float64("mom6", r6.Value(a, data.AdjClose)).
+			Float64("score", score.Value(a, data.AdjClose)).
+			Msg("momentum score")
+	}
+
 	// Record momentum scores as structured annotations.
 	score.Annotate(strategyPortfolio)
 
-	riskOffDF, err := s.RiskOff.At(ctx, eng.CurrentDate(), data.MetricClose)
+	riskOffDF, err := s.RiskOff.At(ctx, eng.CurrentDate(), data.AdjClose)
 	if err != nil {
 		return fmt.Errorf("fetch risk-off: %w", err)
 	}
 
 	// Select the asset with the highest positive score; fall back to risk-off.
-	portfolio.MaxAboveZero(data.MetricClose, riskOffDF).Select(score)
+	portfolio.MaxAboveZero(data.AdjClose, riskOffDF).Select(score)
 
 	plan, err := portfolio.EqualWeight(score)
 	if err != nil {
