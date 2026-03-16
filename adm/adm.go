@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package adm
 
 import (
 	"context"
@@ -51,7 +51,6 @@ func (s *AcceleratingDualMomentum) Setup(eng *engine.Engine) {
 
 	eng.Schedule(tc)
 	eng.SetBenchmark(eng.Asset("VFINX"))
-	eng.RiskFreeAsset(eng.Asset("DGS3MO"))
 }
 
 func (s *AcceleratingDualMomentum) Describe() engine.StrategyDescription {
@@ -59,7 +58,7 @@ func (s *AcceleratingDualMomentum) Describe() engine.StrategyDescription {
 		ShortCode:   "adm",
 		Description: description,
 		Source:      "https://engineeredportfolio.com/2018/05/02/accelerating-dual-momentum-investing/",
-		Version:     "1.1.0",
+		Version:     "1.0.0",
 		VersionDate: time.Date(2026, 3, 14, 0, 0, 0, 0, time.UTC),
 	}
 }
@@ -104,8 +103,6 @@ func (s *AcceleratingDualMomentum) Compute(ctx context.Context, eng *engine.Engi
 		Int("riskfree_rows", riskFree.Len()).
 		Time("prices_start", prices.Start()).
 		Time("prices_end", prices.End()).
-		Time("riskfree_start", riskFree.Start()).
-		Time("riskfree_end", riskFree.End()).
 		Msg("monthly data after downsample")
 
 	if prices.Len() < 7 {
