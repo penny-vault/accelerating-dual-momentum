@@ -2,12 +2,10 @@ module github.com/penny-vault/accelerating-dual-momentum
 
 go 1.25.6
 
-replace github.com/penny-vault/pvbt => /Users/jdf/Developer/penny-vault/pvbt
-
 require (
 	github.com/onsi/ginkgo/v2 v2.28.1
 	github.com/onsi/gomega v1.39.1
-	github.com/penny-vault/pvbt v0.0.0-00010101000000-000000000000
+	github.com/penny-vault/pvbt v0.2.0
 	github.com/rs/zerolog v1.34.0
 )
 
