@@ -22,10 +22,11 @@ import (
 	"math"
 	"time"
 
+	"strconv"
+
 	"github.com/penny-vault/pvbt/data"
 	"github.com/penny-vault/pvbt/engine"
 	"github.com/penny-vault/pvbt/portfolio"
-	"github.com/penny-vault/pvbt/tradecron"
 	"github.com/penny-vault/pvbt/universe"
 	"github.com/rs/zerolog"
 )
@@ -42,15 +43,7 @@ func (s *AcceleratingDualMomentum) Name() string {
 	return "Accelerating Dual Momentum"
 }
 
-func (s *AcceleratingDualMomentum) Setup(eng *engine.Engine) {
-	tc, err := tradecron.New("@monthend", tradecron.MarketHours{Open: 930, Close: 1600})
-	if err != nil {
-		panic(err)
-	}
-
-	eng.Schedule(tc)
-	eng.SetBenchmark(eng.Asset("VFINX"))
-}
+func (s *AcceleratingDualMomentum) Setup(_ *engine.Engine) {}
 
 func (s *AcceleratingDualMomentum) Describe() engine.StrategyDescription {
 	return engine.StrategyDescription{
@@ -59,10 +52,12 @@ func (s *AcceleratingDualMomentum) Describe() engine.StrategyDescription {
 		Source:      "https://engineeredportfolio.com/2018/05/02/accelerating-dual-momentum-investing/",
 		Version:     "1.0.0",
 		VersionDate: time.Date(2026, 3, 14, 0, 0, 0, 0, time.UTC),
+		Schedule:    "@monthend",
+		Benchmark:   "VFINX",
 	}
 }
 
-func (s *AcceleratingDualMomentum) Compute(ctx context.Context, eng *engine.Engine, strategyPortfolio portfolio.Portfolio) error {
+func (s *AcceleratingDualMomentum) Compute(ctx context.Context, eng *engine.Engine, strategyPortfolio portfolio.Portfolio, batch *portfolio.Batch) error {
 	priceDF, err := s.RiskOn.Window(ctx, portfolio.Months(7), data.AdjClose)
 	if err != nil {
 		return fmt.Errorf("fetch risk-on prices: %w", err)
@@ -111,7 +106,14 @@ func (s *AcceleratingDualMomentum) Compute(ctx context.Context, eng *engine.Engi
 	}
 
 	// Record momentum scores as structured annotations.
-	score.Annotate(strategyPortfolio)
+	for _, a := range score.AssetList() {
+		for _, m := range score.MetricList() {
+			v := score.Value(a, m)
+			if !math.IsNaN(v) {
+				batch.Annotate(a.Ticker+"/"+string(m), strconv.FormatFloat(v, 'f', -1, 64))
+			}
+		}
+	}
 
 	riskOffDF, err := s.RiskOff.At(ctx, eng.CurrentDate(), data.AdjClose)
 	if err != nil {
@@ -126,5 +128,5 @@ func (s *AcceleratingDualMomentum) Compute(ctx context.Context, eng *engine.Engi
 		return fmt.Errorf("EqualWeight: %w", err)
 	}
 
-	return strategyPortfolio.RebalanceTo(ctx, plan...)
+	return batch.RebalanceTo(ctx, plan...)
 }
