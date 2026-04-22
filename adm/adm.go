@@ -20,9 +20,8 @@ import (
 	_ "embed"
 	"fmt"
 	"math"
-	"time"
-
 	"strconv"
+	"time"
 
 	"github.com/penny-vault/pvbt/data"
 	"github.com/penny-vault/pvbt/engine"
@@ -57,67 +56,58 @@ func (s *AcceleratingDualMomentum) Describe() engine.StrategyDescription {
 	}
 }
 
-func (s *AcceleratingDualMomentum) Compute(ctx context.Context, eng *engine.Engine, strategyPortfolio portfolio.Portfolio, batch *portfolio.Batch) error {
+func (s *AcceleratingDualMomentum) Compute(ctx context.Context, _ *engine.Engine, _ portfolio.Portfolio, batch *portfolio.Batch) error {
+	log := zerolog.Ctx(ctx)
+
 	priceDF, err := s.RiskOn.Window(ctx, portfolio.Months(7), data.AdjClose)
 	if err != nil {
-		return fmt.Errorf("fetch risk-on prices: %w", err)
+		log.Error().Err(err).Int("lookback_months", 7).Msg("failed to fetch risk-on price window")
+		return fmt.Errorf("fetch risk-on price window: %w", err)
 	}
 
 	prices := priceDF.Downsample(data.Monthly).Last()
 
-	log := zerolog.Ctx(ctx)
-	log.Debug().
-		Int("prices_rows", prices.Len()).
-		Time("prices_start", prices.Start()).
-		Time("prices_end", prices.End()).
-		Msg("monthly data after downsample")
-
 	if prices.Len() < 7 {
-		return fmt.Errorf("expected at least 7 monthly price rows, got %d (start=%s end=%s)",
-			prices.Len(), prices.Start().Format("2006-01-02"), prices.End().Format("2006-01-02"))
+		log.Error().
+			Int("actual_rows", prices.Len()).
+			Int("required_rows", 7).
+			Time("prices_start", prices.Start()).
+			Time("prices_end", prices.End()).
+			Msg("insufficient price history for 6-month momentum")
+		return fmt.Errorf("insufficient price history: need 7 monthly observations, got %d", prices.Len())
 	}
 
 	mom1 := prices.RiskAdjustedPct(1).MulScalar(100)
 	mom3 := prices.RiskAdjustedPct(3).MulScalar(100)
 	mom6 := prices.RiskAdjustedPct(6).MulScalar(100)
 
-	if mom6.Err() != nil {
-		return fmt.Errorf("risk-adjusted momentum: %w", mom6.Err())
+	score := mom1.Add(mom3).Add(mom6).DivScalar(3)
+	if err := score.Err(); err != nil {
+		log.Error().Err(err).Msg("failed to compute composite momentum score")
+		return fmt.Errorf("compute composite momentum score: %w", err)
 	}
 
-	score := mom1.Add(mom3).Add(mom6).DivScalar(3)
 	score = score.Drop(math.NaN()).Last()
-
 	if score.Len() == 0 {
 		return nil
 	}
 
-	for _, asset := range score.AssetList() {
-		r1 := mom1.Drop(math.NaN()).Last()
-		r3 := mom3.Drop(math.NaN()).Last()
-		r6 := mom6.Drop(math.NaN()).Last()
-		log.Debug().
-			Str("ticker", asset.Ticker).
-			Float64("mom1", r1.Value(asset, data.AdjClose)).
-			Float64("mom3", r3.Value(asset, data.AdjClose)).
-			Float64("mom6", r6.Value(asset, data.AdjClose)).
-			Float64("score", score.Value(asset, data.AdjClose)).
-			Msg("momentum score")
-	}
-
-	// Record momentum scores as structured annotations.
 	for _, a := range score.AssetList() {
-		for _, m := range score.MetricList() {
-			v := score.Value(a, m)
-			if !math.IsNaN(v) {
-				batch.Annotate(a.Ticker+"/"+string(m), strconv.FormatFloat(v, 'f', -1, 64))
-			}
+		v := score.Value(a, data.AdjClose)
+		log.Debug().
+			Str("ticker", a.Ticker).
+			Float64("score", v).
+			Msg("momentum score")
+
+		if !math.IsNaN(v) {
+			batch.Annotate(a.Ticker+"/score", strconv.FormatFloat(v, 'f', -1, 64))
 		}
 	}
 
-	riskOffDF, err := s.RiskOff.At(ctx, eng.CurrentDate(), data.AdjClose)
+	riskOffDF, err := s.RiskOff.At(ctx, data.AdjClose)
 	if err != nil {
-		return fmt.Errorf("fetch risk-off: %w", err)
+		log.Error().Err(err).Msg("failed to fetch risk-off price")
+		return fmt.Errorf("fetch risk-off price: %w", err)
 	}
 
 	// Select the asset with the highest positive score; fall back to risk-off.
@@ -125,8 +115,14 @@ func (s *AcceleratingDualMomentum) Compute(ctx context.Context, eng *engine.Engi
 
 	plan, err := portfolio.EqualWeight(score)
 	if err != nil {
-		return fmt.Errorf("EqualWeight: %w", err)
+		log.Error().Err(err).Int("selected_assets", len(score.AssetList())).Msg("failed to build equal-weight allocation")
+		return fmt.Errorf("build equal-weight allocation: %w", err)
 	}
 
-	return batch.RebalanceTo(ctx, plan...)
+	if err := batch.RebalanceTo(ctx, plan...); err != nil {
+		log.Error().Err(err).Int("allocations", len(plan)).Msg("failed to execute rebalance")
+		return fmt.Errorf("rebalance to target allocation: %w", err)
+	}
+
+	return nil
 }
