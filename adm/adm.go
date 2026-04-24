@@ -74,6 +74,7 @@ func (s *AcceleratingDualMomentum) Compute(ctx context.Context, _ *engine.Engine
 			Time("prices_start", prices.Start()).
 			Time("prices_end", prices.End()).
 			Msg("insufficient price history for 6-month momentum")
+
 		return fmt.Errorf("insufficient price history: need 7 monthly observations, got %d", prices.Len())
 	}
 
