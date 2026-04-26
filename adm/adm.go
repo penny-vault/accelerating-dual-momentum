@@ -93,15 +93,15 @@ func (s *AcceleratingDualMomentum) Compute(ctx context.Context, _ *engine.Engine
 		return nil
 	}
 
-	for _, a := range score.AssetList() {
-		v := score.Value(a, data.AdjClose)
+	for _, scored := range score.AssetList() {
+		momScore := score.Value(scored, data.AdjClose)
 		log.Debug().
-			Str("ticker", a.Ticker).
-			Float64("score", v).
+			Str("ticker", scored.Ticker).
+			Float64("score", momScore).
 			Msg("momentum score")
 
-		if !math.IsNaN(v) {
-			batch.Annotate(a.Ticker+"/score", strconv.FormatFloat(v, 'f', -1, 64))
+		if !math.IsNaN(momScore) {
+			batch.Annotate(scored.Ticker+"/score", strconv.FormatFloat(momScore, 'f', -1, 64))
 		}
 	}
 
