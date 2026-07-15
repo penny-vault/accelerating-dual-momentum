@@ -49,8 +49,8 @@ func (s *AcceleratingDualMomentum) Describe() engine.StrategyDescription {
 		ShortCode:   "adm",
 		Description: description,
 		Source:      "https://engineeredportfolio.com/2018/05/02/accelerating-dual-momentum-investing/",
-		Version:     "1.0.0",
-		VersionDate: time.Date(2026, 3, 14, 0, 0, 0, 0, time.UTC),
+		Version:     "1.0.1",
+		VersionDate: time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC),
 		Schedule:    "@monthend",
 		Benchmark:   "SPY",
 	}
